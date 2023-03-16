@@ -1,0 +1,54 @@
+
+on:
+  push:
+    tags:
+      - "v*.*"
+name: Wheel Builder
+
+permissions:
+  contents: read # to fetch code (actions/checkout)
+
+jobs:
+
+  build:
+    # Windows is currently the only platform this action supports
+    env:
+      IN_PIPELINE: true
+    strategy:
+      matrix:
+        architecture: ["x86", "x64", "x86","x64"]
+        path: ["FHP_dataset", "FHP_dataset.exe", "FHP_dataset.exe", "FHP_dataset"]
+        os: [ubuntu-latest, windows-x64, windows-x86, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+    
+      # Check-out repository
+      - uses: actions/checkout@v1
+      - name: Set env
+        run: echo "RELEASE_VERSION=${GITHUB_REF#refs/*/}" >> $GITHUB_ENV
+      # Setup Python
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.x' # Version range or exact version of a Python version to use, using SemVer's version range syntax
+          architecture: '${{ matrix.architecture }}' # optional x64 or x86. Defaults to x64 if not specified
+
+      # Build python script into a stand-alone exe
+      - uses: Nuitka/Nuitka-Action@v0.4
+        with:
+          script-name: FHP_dataset.py
+      - name: Zip binary
+        run: |
+          Compress-Archive -LiteralPath '${{ matrix.path }}' -DestinationPath '${{ matrix.os }}.zip'
+      # Uploads artifact
+      - name: Create Release
+        id: create_release
+        uses: ncipollo/release-action@v1
+        with:
+          token: ${{ secrets.TOKEN }}
+          tag: ${{ env.RELEASE_VERSION }}
+          name: ${{ env.RELEASE_VERSION }}
+          allowUpdates: true
+          prerelease: true
+          updateOnlyUnreleased: true
+          artifacts: ${{ matrix.os }}.zip
+          artifactContentType: application/zip
