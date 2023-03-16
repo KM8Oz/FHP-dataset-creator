@@ -1,45 +1,70 @@
+name: Create and upload artifacts
 
 on:
   push:
     tags:
-      - "v*.*"
-name: Wheel Builder
-
-permissions:
-  contents: read # to fetch code (actions/checkout)
-
+      - v*.*
 jobs:
-
-  build:
-    # Windows is currently the only platform this action supports
+  build-nix:
     env:
       IN_PIPELINE: true
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        architecture: ["x86", "x64", "x86","x64"]
-        path: ["FHP_dataset", "FHP_dataset.exe", "FHP_dataset.exe", "FHP_dataset"]
-        os: [ubuntu-latest, windows-x64, windows-x86, macos-latest]
-    runs-on: ${{ matrix.os }}
+        type: [ubuntu-x64, ubuntu-x86, armv7, aarch64]
+        include:
+          - type: ubuntu-x64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            name: open_proxies-linux
+            path: target/x86_64-unknown-linux-musl/release/open_proxies
+            pkg_config_path: /usr/lib/x86_64-linux-gnu/pkgconfig
+          - type: ubuntu-x86
+            os: ubuntu-latest
+            target: i686-unknown-linux-musl
+            name: open_proxies-linux-i386
+            path: target/i686-unknown-linux-musl/release/open_proxies
+            pkg_config_path: /usr/lib/i686-linux-gnu/pkgconfig
+          - type: armv7
+            os: ubuntu-latest
+            target: armv7-unknown-linux-gnueabihf
+            name: open_proxies-armv7
+            path: target/armv7-unknown-linux-gnueabihf/release/open_proxies
+            pkg_config_path: /usr/lib/x86_64-linux-gnu/pkgconfig
+          - type: aarch64
+            os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            name: open_proxies-aarch64
+            path: target/aarch64-unknown-linux-gnu/release/open_proxies
+            pkg_config_path: /usr/lib/x86_64-linux-gnu/pkgconfig
     steps:
-    
-      # Check-out repository
       - uses: actions/checkout@v1
       - name: Set env
         run: echo "RELEASE_VERSION=${GITHUB_REF#refs/*/}" >> $GITHUB_ENV
-      # Setup Python
-      - uses: actions/setup-python@v4
+      - name: Install System Dependencies
+        run: |
+          env
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libssl-dev pkg-config gcc-arm-linux-gnueabihf gcc-aarch64-linux-gnu
+      - uses: actions-rs/toolchain@v1
         with:
-          python-version: '3.x' # Version range or exact version of a Python version to use, using SemVer's version range syntax
-          architecture: '${{ matrix.architecture }}' # optional x64 or x86. Defaults to x64 if not specified
-
-      # Build python script into a stand-alone exe
-      - uses: Nuitka/Nuitka-Action@v0.4
+          toolchain: stable
+          target: ${{ matrix.target }}
+          override: true
+      - uses: actions-rs/cargo@v1
+        env:
+          PKG_CONFIG_PATH: ${{ matrix.pkg_config_path }}
+          OPENSSL_DIR: /usr/lib/ssl
         with:
-          script-name: FHP_dataset.py
+          use-cross: true
+          command: build
+          args: --release --target=${{ matrix.target }}
+      - name: Strip symbols from binary
+        run: |
+          strip -s ${{ matrix.path }} || arm-linux-gnueabihf-strip -s ${{ matrix.path }} || aarch64-linux-gnu-strip -s ${{ matrix.path }}
       - name: Zip binary
         run: |
-          Compress-Archive -LiteralPath '${{ matrix.path }}' -DestinationPath '${{ matrix.os }}.zip'
-      # Uploads artifact
+          zip ${{ matrix.target }}.zip ${{ matrix.path }}
       - name: Create Release
         id: create_release
         uses: ncipollo/release-action@v1
@@ -50,5 +75,140 @@ jobs:
           allowUpdates: true
           prerelease: true
           updateOnlyUnreleased: true
-          artifacts: ${{ matrix.os }}.zip
+          artifacts: ${{ matrix.target }}.zip
           artifactContentType: application/zip
+      # - name: Upload Release Asset
+      #   id: upload-release-asset 
+      #   uses: actions/upload-release-asset@v1
+      #   env:
+      #     GITHUB_TOKEN: ${{ secrets.TOKEN }}
+      #   with:
+      #     upload_url: ${{ steps.create_release.outputs.upload_url }} # This pulls from the CREATE RELEASE step above, referencing it's ID to get its outputs object, which include a `upload_url`. See this blog post for more info: https://jasonet.co/posts/new-features-of-github-actions/#passing-data-to-future-steps 
+      #     asset_path: ${{ matrix.target }}.zip
+      #     asset_name: ${{ matrix.target }}.zip
+      #     asset_content_type: application/zip
+
+  build-macos:
+    env:
+      IN_PIPELINE: true
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v1
+      - name: Set env
+        run: echo "RELEASE_VERSION=${GITHUB_REF#refs/*/}" >> $GITHUB_ENV
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: x86_64-apple-darwin
+          override: true
+      - uses: actions-rs/cargo@v1
+        with:
+          use-cross: true
+          command: build
+          args: --release --target=x86_64-apple-darwin
+      - name: Strip symbols from binary
+        run: |
+          strip -u -r target/x86_64-apple-darwin/release/open_proxies
+      - name: Zip binary
+        run: |
+          zip x86_64-apple-darwin.zip target/x86_64-apple-darwin/release/open_proxies
+      - name: Create Release
+        id: create_release
+        uses: ncipollo/release-action@v1
+        with:
+          token: ${{ secrets.TOKEN }}
+          tag: ${{ env.RELEASE_VERSION }}
+          name: ${{ env.RELEASE_VERSION }}
+          allowUpdates: true
+          prerelease: true
+          updateOnlyUnreleased: true
+          artifacts: x86_64-apple-darwin.zip
+          artifactContentType: application/zip
+      # - name: Create Release
+      #   id: create_release
+      #   uses: actions/create-release@v1
+      #   env:
+      #     GITHUB_TOKEN: ${{ secrets.TOKEN }}
+      #   with:
+      #     tag_name: ${{ github.ref }}
+      #     release_name: Release ${{ github.ref }}
+      #     draft: false
+      #     prerelease: false
+      # - name: Upload Release Asset
+      #   id: upload-release-asset 
+      #   uses: actions/upload-release-asset@v1
+      #   env:
+      #     GITHUB_TOKEN: ${{ secrets.TOKEN }}
+      #   with:
+      #     upload_url: ${{ steps.create_release.outputs.upload_url }} # This pulls from the CREATE RELEASE step above, referencing it's ID to get its outputs object, which include a `upload_url`. See this blog post for more info: https://jasonet.co/posts/new-features-of-github-actions/#passing-data-to-future-steps 
+      #     asset_path: ${{ matrix.target }}.zip
+      #     asset_name: ${{ matrix.target }}.zip
+      #     asset_content_type: application/zip
+
+  build-windows:
+    env:
+      IN_PIPELINE: true
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        type: [windows-x64, windows-x86]
+        include:
+          - type: windows-x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            name: open_proxies-windows.exe
+            path: target\x86_64-pc-windows-msvc\release\open_proxies.exe
+          - type: windows-x86
+            os: windows-latest
+            target: i686-pc-windows-msvc
+            name: open_proxies-windows-i686.exe
+            path: target\i686-pc-windows-msvc\release\open_proxies.exe
+    steps:
+      - uses: actions/checkout@v1
+      - name: Set env
+        run: echo "RELEASE_VERSION=${GITHUB_REF#refs/*/}" >> $GITHUB_ENV
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: ${{ matrix.target }}
+          override: true
+      - uses: actions-rs/cargo@v1
+        with:
+          use-cross: true
+          command: build
+          args: --release --target=${{ matrix.target }}
+      - name: Zip binary
+        run: |
+          Compress-Archive -LiteralPath '${{ matrix.path }}' -DestinationPath '${{ matrix.target }}.zip'
+      - name: Create Release
+        id: create_release
+        uses: ncipollo/release-action@v1
+        with:
+          token: ${{ secrets.TOKEN }}
+          tag: ${{ env.RELEASE_VERSION }}
+          name: ${{ env.RELEASE_VERSION }}
+          allowUpdates: true
+          prerelease: true
+          updateOnlyUnreleased: true
+          artifacts: ${{ matrix.target }}.zip
+          artifactContentType: application/zip
+      # - name: Create Release
+      #   id: create_release
+      #   uses: actions/create-release@v1
+      #   env:
+      #     GITHUB_TOKEN: ${{ secrets.TOKEN }}
+      #   with:
+      #     tag_name: ${{ github.ref }}
+      #     release_name: Release ${{ github.ref }}
+      #     draft: false
+      #     prerelease: false
+      # - name: Upload Release Asset
+      #   id: upload-release-asset 
+      #   uses: actions/upload-release-asset@v1
+      #   env:
+      #     GITHUB_TOKEN: ${{ secrets.TOKEN }}
+      #   with:
+      #     upload_url: ${{ steps.create_release.outputs.upload_url }} # This pulls from the CREATE RELEASE step above, referencing it's ID to get its outputs object, which include a `upload_url`. See this blog post for more info: https://jasonet.co/posts/new-features-of-github-actions/#passing-data-to-future-steps 
+      #     asset_path: ${{ matrix.target }}.zip
+      #     asset_name: ${{ matrix.target }}.zip
+      #     asset_content_type: application/zip
