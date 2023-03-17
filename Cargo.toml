@@ -17,6 +17,10 @@ features = ["net", "time","sync", "process", "macros", "rt", "rt-multi-thread"]
 version = "0.3.25"
 [dependencies.rayon]
 version = "1.5"
+[dependencies.sysinfo]
+version = "0.28.2"
+[dependencies.psutil]
+version = "3.2.2"
 [dependencies.regex]
 version = "1"
 [dependencies.httparse]
